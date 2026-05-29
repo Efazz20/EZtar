@@ -1,1 +1,63 @@
+name: EzTVps
 
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Keep alive duration in hours (max 6)'
+        required: true
+        default: '4.5'
+        type: string
+
+jobs:
+  vps:
+    runs-on: ubuntu-latest
+    # Set a generous global timeout (6 hours maximum for public repos)
+    timeout-minutes: 360
+
+    steps:
+      - name: Setup SSH server
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
+
+          # Add your public key for password-less login
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          chmod 700 ~/.ssh
+
+          # Disable password authentication for security
+          sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+          sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          # Optional: use version 'latest' (default) or specify a stable version
+
+      - name: Show connection details
+        run: |
+          TAILSCALE_IP=$(tailscale ip -4)
+          echo "Tailscale IP: $TAILSCALE_IP"
+          echo "VPS_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+
+          {
+            echo "### 🖥️ Temporary VPS is Ready"
+            echo "- **Tailscale IP:** \`$TAILSCALE_IP\`"
+            echo "- **SSH User:** \`runner\`"
+            echo "- **SSH Command:** \`ssh runner@$TAILSCALE_IP\`"
+            echo "- **Keep alive until:** $(date -u -d "+${{ github.event.inputs.duration }} hours" +'%Y-%m-%d %H:%M UTC')"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Keep alive
+        run: |
+          DURATION_HOURS="${{ github.event.inputs.duration }}"
+          # Convert hours to seconds (Python handles float input)
+          SLEEP_SECONDS=$(python3 -c "print(int(${DURATION_HOURS} * 3600))")
+          echo "Keeping the runner alive for ${SLEEP_SECONDS} seconds (${DURATION_HOURS} hours)..."
+          sleep "${SLEEP_SECONDS}"
